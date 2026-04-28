@@ -22,7 +22,6 @@
 6. [Scaling Considerations](#scaling-considerations)
 7. [Security and SSL Deep Dive](#security-and-ssl-deep-dive)
 8. [Secure Tunnel Deep Dive](#secure-tunnel-deep-dive)
-9. [Architecture Diagrams](#architecture-diagrams)
 
 ---
 
@@ -126,17 +125,21 @@ In this model, the DSA server (or its reverse proxy) is directly reachable from 
 
 ### Architecture Flow
 
-```text
-User Browser
-    ↓ HTTPS
-Public DNS (bdsa.institution.edu → your server IP)
-    ↓
-Reverse Proxy (NGINX/Apache on the same server or a front-end server)
-    ↓ HTTP (internal)
-DSA Containers
-    ↓
-Slide Storage
+```mermaid
+graph TD
+    A[User Browser] -->|HTTPS| B[Public DNS<br>bdsa.institution.edu]
+    B -->|Resolve IP| C[Reverse Proxy<br>NGINX/Apache]
+    C -->|HTTP :8080| D[DSA Containers<br>Girder + Workers]
+    D -->|Read/Write| E[Slide Storage<br>Local/NFS/S3]
+
+    style A fill:#4A90D9,color:#fff
+    style B fill:#7B68EE,color:#fff
+    style C fill:#F5A623,color:#fff
+    style D fill:#D0021B,color:#fff
+    style E fill:#9B9B9B,color:#fff
 ```
+
+The reverse proxy is the single entry point, handling SSL termination and forwarding to the DSA containers.
 
 ### Benefits
 
@@ -164,15 +167,20 @@ The key insight is that the tunnel is established **outbound** from the internal
 
 ### Architecture Flow
 
-```text
-User Browser
-    ↓ HTTPS
-Hub Node (NGINX + SSL termination, publicly accessible)
-    ↓ Forwards through tunnel
-Internal DSA Server (initiated the tunnel outbound)
-    ↓
-Slide Storage
+```mermaid
+graph TD
+    A[User Browser] -->|HTTPS| B[Hub Node<br>NGINX + SSL]
+    C[Internal DSA Server] -->|Outbound Tunnel<br>Initiated from inside| B
+    B -->|Forward via Tunnel| C
+    C -->|Read/Write| D[Slide Storage]
+
+    style A fill:#4A90D9,color:#fff
+    style B fill:#F5A623,color:#fff
+    style C fill:#D0021B,color:#fff
+    style D fill:#9B9B9B,color:#fff
 ```
+
+Note that the tunnel connection originates from the internal server (outbound), which is why no inbound firewall rules are needed.
 
 ### Benefits
 
@@ -495,6 +503,28 @@ The DSA container must be able to access:
 
 Storage is often the **largest and most consequential deployment decision** for a DSA instance. Whole-slide images are among the largest files commonly served over the web, and the storage architecture you choose affects performance, cost, reliability, and scalability.
 
+```mermaid
+graph TD
+    subgraph Local Storage
+        A1[DSA Server] -->|Direct I/O| A2[Local Disk<br>Simple, Fast, Limited Scale]
+    end
+    subgraph Network Storage
+        B1[DSA Server] -->|NFS/SMB Mount| B2[Network Appliance<br>Centralized, Expandable]
+    end
+    subgraph Object Storage
+        C1[DSA Server] -->|S3 API| C2[Object Store<br>Scalable, Durable, Complex]
+    end
+
+    style A1 fill:#4A90D9,color:#fff
+    style A2 fill:#9B9B9B,color:#fff
+    style B1 fill:#4A90D9,color:#fff
+    style B2 fill:#7B68EE,color:#fff
+    style C1 fill:#4A90D9,color:#fff
+    style C2 fill:#50C878,color:#fff
+```
+
+This diagram helps stakeholders understand the tradeoffs between storage options at a glance.
+
 ---
 
 ## Option 1: Local Storage
@@ -565,6 +595,33 @@ Object storage is the best choice for **large or growing collections** (thousand
 # Scaling Considerations
 
 A small DSA deployment (a few dozen users, a few hundred slides) runs comfortably on a single server. As usage grows, you may need to scale individual components. The key principle is to **scale components independently**: do not add more web servers if the bottleneck is the database.
+
+```mermaid
+graph TD
+    A[User Browser] -->|HTTPS| B[Load Balancer]
+    B -->|HTTP| C[DSA Web Node 1]
+    B -->|HTTP| D[DSA Web Node 2]
+    C -->|Tasks| E[RabbitMQ]
+    D -->|Tasks| E
+    E -->|Dispatch| F[Worker Node 1]
+    E -->|Dispatch| G[Worker Node 2]
+    C -->|Read/Write| H[Shared Storage<br>NFS or S3]
+    D -->|Read/Write| H
+    C -->|Metadata| I[MongoDB<br>Dedicated Server]
+    D -->|Metadata| I
+
+    style A fill:#4A90D9,color:#fff
+    style B fill:#F5A623,color:#fff
+    style C fill:#D0021B,color:#fff
+    style D fill:#D0021B,color:#fff
+    style E fill:#FFD700,color:#333
+    style F fill:#50C878,color:#fff
+    style G fill:#50C878,color:#fff
+    style H fill:#9B9B9B,color:#fff
+    style I fill:#7B68EE,color:#fff
+```
+
+This diagram illustrates an enterprise-scale deployment with independent scaling of web nodes, workers, storage, and database.
 
 ---
 
@@ -690,6 +747,18 @@ You might wonder why the reverse proxy handles SSL instead of the DSA applicatio
 3. **Centralized security policy:** The proxy can enforce security headers (HSTS, CSP), rate limiting, and connection policies in one place, rather than scattering these concerns across the application.
 4. **Container portability:** If the application does not need to know about certificates, the same container image works in any environment (development, staging, production) without modification.
 
+```mermaid
+graph LR
+    A[User Browser] -->|Encrypted HTTPS| B[Reverse Proxy<br>SSL Certificate Here]
+    B -->|Decrypted HTTP| C[DSA Container<br>No Certificate Needed]
+
+    style A fill:#4A90D9,color:#fff
+    style B fill:#F5A623,color:#fff
+    style C fill:#D0021B,color:#fff
+```
+
+This diagram highlights where encryption ends and internal forwarding begins. The DSA container never handles certificates; the proxy centralizes this responsibility.
+
 ---
 
 [Back to top](#table-of-contents)
@@ -735,96 +804,6 @@ When implementing a tunnel, document the following:
 2. **Which ports are forwarded:** Typically only HTTP (port 8080 internally) needs to be forwarded through the tunnel.
 3. **Authentication between Hub node and internal node:** The tunnel must be authenticated so that only your internal server can connect to your Hub node. Use the authentication mechanism built into the integrated tunnel system.
 4. **Failure handling:** What happens when the tunnel drops? The internal server should automatically reconnect. The Hub node should return a meaningful error page (not a connection timeout) when the tunnel is down. Monitor tunnel health and alert on disconnections.
-
----
-
-[Back to top](#table-of-contents)
-
----
-
-# Architecture Diagrams
-
-The following diagrams illustrate the key deployment architectures discussed in this guide.
-
----
-
-## Diagram 1: Public Deployment Architecture
-
-```mermaid
-graph TD
-    A[User Browser] -->|HTTPS| B[Public DNS<br>bdsa.institution.edu]
-    B -->|Resolve IP| C[Reverse Proxy<br>NGINX/Apache]
-    C -->|HTTP :8080| D[DSA Containers<br>Girder + Workers]
-    D -->|Read/Write| E[Slide Storage<br>Local/NFS/S3]
-```
-
-This diagram shows the direct HTTPS flow in a public deployment. The reverse proxy is the single entry point, handling SSL termination and forwarding to the DSA containers.
-
----
-
-## Diagram 2: SSL Termination at Reverse Proxy
-
-```mermaid
-graph LR
-    A[User Browser] -->|Encrypted HTTPS| B[Reverse Proxy<br>SSL Certificate Here]
-    B -->|Decrypted HTTP| C[DSA Container<br>No Certificate Needed]
-```
-
-This diagram highlights where encryption ends and internal forwarding begins. The DSA container never handles certificates; the proxy centralizes this responsibility.
-
----
-
-## Diagram 3: Secure Tunnel Architecture
-
-```mermaid
-graph TD
-    A[User Browser] -->|HTTPS| B[Hub Node<br>NGINX + SSL]
-    C[Internal DSA Server] -->|Outbound Tunnel<br>Initiated from inside| B
-    B -->|Forward via Tunnel| C
-    C -->|Read/Write| D[Slide Storage]
-```
-
-This diagram shows the tunnel architecture. Note that the tunnel connection originates from the internal server (outbound), which is why no inbound firewall rules are needed.
-
----
-
-## Diagram 4: Storage Options Comparison
-
-```mermaid
-graph TD
-    subgraph Local Storage
-        A1[DSA Server] -->|Direct I/O| A2[Local Disk<br>Simple, Fast, Limited Scale]
-    end
-    subgraph Network Storage
-        B1[DSA Server] -->|NFS/SMB Mount| B2[Network Appliance<br>Centralized, Expandable]
-    end
-    subgraph Object Storage
-        C1[DSA Server] -->|S3 API| C2[Object Store<br>Scalable, Durable, Complex]
-    end
-```
-
-This diagram helps stakeholders understand the tradeoffs between storage options at a glance.
-
----
-
-## Diagram 5: Scaled Deployment
-
-```mermaid
-graph TD
-    A[User Browser] -->|HTTPS| B[Load Balancer]
-    B -->|HTTP| C[DSA Web Node 1]
-    B -->|HTTP| D[DSA Web Node 2]
-    C -->|Tasks| E[RabbitMQ]
-    D -->|Tasks| E
-    E -->|Dispatch| F[Worker Node 1]
-    E -->|Dispatch| G[Worker Node 2]
-    C -->|Read/Write| H[Shared Storage<br>NFS or S3]
-    D -->|Read/Write| H
-    C -->|Metadata| I[MongoDB<br>Dedicated Server]
-    D -->|Metadata| I
-```
-
-This diagram illustrates an enterprise-scale deployment with independent scaling of web nodes, workers, storage, and database.
 
 ---
 
