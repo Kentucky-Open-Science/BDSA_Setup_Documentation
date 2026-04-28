@@ -509,17 +509,15 @@ graph TD
         A1[DSA Server] -->|Direct I/O| A2[Local Disk<br>Simple, Fast, Limited Scale]
     end
     subgraph Network Storage
-        B1[DSA Server] -->|NFS/SMB Mount| B2[Network Appliance<br>Centralized, Expandable]
+        A1[DSA Server] -->|NFS/SMB Mount| B2[Network Appliance<br>Centralized, Expandable]
     end
     subgraph Object Storage
-        C1[DSA Server] -->|S3 API| C2[Object Store<br>Scalable, Durable, Complex]
+        A1[DSA Server] -->|S3 API| C2[Object Store<br>Scalable, Durable, Complex]
     end
 
     style A1 fill:#4A90D9,color:#fff
     style A2 fill:#9B9B9B,color:#fff
-    style B1 fill:#4A90D9,color:#fff
     style B2 fill:#7B68EE,color:#fff
-    style C1 fill:#4A90D9,color:#fff
     style C2 fill:#50C878,color:#fff
 ```
 
